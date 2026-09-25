@@ -2,10 +2,10 @@ import { FormEvent, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDownToLine, Boxes, Link2, RefreshCw } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Toast } from '../components/Toast';
-import { getBatches, getMovements, getProducts } from '../lib/data';
+import { getBatches, getMovements, getProducts, getSuppliers } from '../lib/data';
 import { dateTime, money } from '../lib/format';
 import { supabase } from '../lib/supabase';
-import type { InventoryBatch, InventoryMovement, Product } from '../types';
+import type { InventoryBatch, InventoryMovement, Product, Supplier } from '../types';
 import { Top } from './Products';
 
 type Mode = 'single' | 'batch' | 'adjust';
@@ -16,6 +16,8 @@ export function Inventory() {
   const [products, setProducts] = useState<Product[]>([]);
   const [moves, setMoves] = useState<InventoryMovement[]>([]);
   const [batches, setBatches] = useState<InventoryBatch[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierId, setSupplierId] = useState('');
   const [mode, setMode] = useState<Mode>('single');
   const [selected, setSelected] = useState('');
   const [qty, setQty] = useState('');
@@ -28,8 +30,8 @@ export function Inventory() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const load = () => Promise.all([getProducts(true), getMovements(), getBatches()]).then(([p, m, b]) => {
-    setProducts(p); setMoves(m); setBatches(b);
+  const load = () => Promise.all([getProducts(true), getMovements(), getBatches(), getSuppliers()]).then(([p, m, b, s]) => {
+    setProducts(p); setMoves(m); setBatches(b); setSuppliers(s);
     setDraft(Object.fromEntries(p.map(x => [x.id, { quantity: '', unit_cost: String(x.unit_cost) }])));
   });
   useEffect(() => { void load(); }, []);
@@ -59,7 +61,10 @@ export function Inventory() {
     e.preventDefault();
     const items = products.filter(p => Number(draft[p.id]?.quantity) > 0).map(p => ({ product_id: p.id, quantity: Number(draft[p.id].quantity), unit_cost: Number(draft[p.id].unit_cost) }));
     if (!items.length) { setMsg('Informe a quantidade de pelo menos um produto.'); return; }
-    await run(() => supabase.rpc('register_inventory_batch', { p_items: items, p_notes: notes || null }), 'Lote criado e estoque atualizado.');
+    setBusy(true); setMsg('');
+    const { data, error } = await supabase.rpc('register_inventory_batch', { p_items: items, p_notes: notes || null });
+    if (!error && supplierId && data) await supabase.from('inventory_batches').update({ supplier_id: supplierId }).eq('id', data);
+    setBusy(false); if (error) setMsg(error.message); else { setMsg('Lote criado e estoque atualizado.'); setSupplierId(''); setNotes(''); await load(); }
   }
 
   const next = String((batches[0]?.batch_number || 0) + 1).padStart(4, '0');
@@ -77,7 +82,7 @@ export function Inventory() {
       <form onSubmit={submitAssign} className="card space-y-4 p-5"><Title icon={<Link2 size={20} />} text="Vincular estoque existente a um lote" /><p className="text-sm text-muted">Organiza as unidades que já estão no estoque. Esta ação não adiciona nem remove produtos.</p><ProductSelect products={products} selected={selected} choose={choose} /><label><span className="label">Lote</span><select className="input" required value={lotId} onChange={e => setLotId(e.target.value)}><option value="">Selecione o lote</option>{batches.map(b => <option key={b.id} value={b.id}>Lote {String(b.batch_number).padStart(4, '0')}</option>)}</select></label><Field label="Quantidade deste produto no lote" value={lotQty} set={setLotQty} min="0" /><Notes value={notes} set={setNotes} /><button disabled={busy || !batches.length} className="btn-primary w-full">Vincular ao lote</button>{!batches.length && <p className="text-xs text-amber-200">Crie primeiro um lote na opção “Por lote”.</p>}</form>
     </div>}
 
-    {mode === 'batch' && <form onSubmit={submitBatch} className="card mt-4 space-y-4 p-5"><div className="flex items-center justify-between"><Title icon={<Boxes size={20} />} text={`Novo lote ${next}`} /><b className="text-cyan">{money(investment)}</b></div><p className="text-sm text-muted">Preencha somente os produtos que fazem parte deste lote.</p>{products.map(p => <div key={p.id} className="rounded-2xl border border-white/10 p-4"><p className="mb-3 font-bold">{p.name}</p><div className="grid grid-cols-2 gap-3"><Field label="Quantidade" value={draft[p.id]?.quantity || ''} set={v => setDraft(d => ({ ...d, [p.id]: { ...d[p.id], quantity: v } }))} min="0" required={false} /><Field label="Custo unitário" value={draft[p.id]?.unit_cost || ''} set={v => setDraft(d => ({ ...d, [p.id]: { ...d[p.id], unit_cost: v } }))} min="0" step="0.01" /></div></div>)}<Notes value={notes} set={setNotes} /><button disabled={busy} className="btn-primary w-full">Criar lote e adicionar estoque</button></form>}
+    {mode === 'batch' && <form onSubmit={submitBatch} className="card mt-4 space-y-4 p-5"><div className="flex items-center justify-between"><Title icon={<Boxes size={20} />} text={`Novo lote ${next}`} /><b className="text-cyan">{money(investment)}</b></div><p className="text-sm text-muted">Preencha somente os produtos que fazem parte deste lote.</p><label><span className="label">Fornecedor (opcional)</span><select className="input" value={supplierId} onChange={e=>setSupplierId(e.target.value)}><option value="">Não informado</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{products.map(p => <div key={p.id} className="rounded-2xl border border-white/10 p-4"><p className="mb-3 font-bold">{p.name}</p><div className="grid grid-cols-2 gap-3"><Field label="Quantidade" value={draft[p.id]?.quantity || ''} set={v => setDraft(d => ({ ...d, [p.id]: { ...d[p.id], quantity: v } }))} min="0" required={false} /><Field label="Custo unitário" value={draft[p.id]?.unit_cost || ''} set={v => setDraft(d => ({ ...d, [p.id]: { ...d[p.id], unit_cost: v } }))} min="0" step="0.01" /></div></div>)}<Notes value={notes} set={setNotes} /><button disabled={busy} className="btn-primary w-full">Criar lote e adicionar estoque</button></form>}
 
     <div className="mb-3 mt-7 flex items-center justify-between"><h2 className="font-bold">Lotes</h2><Link className="text-sm text-electric" to="/reports">Ver relatório</Link></div>
     <div className="space-y-2">{batches.slice(0, 5).map(b => <div key={b.id} className="card p-4"><div className="flex justify-between"><b>Lote {String(b.batch_number).padStart(4, '0')}</b><span className="text-xs text-muted">{dateTime(b.created_at)}</span></div><p className="mt-2 text-sm text-muted">{b.inventory_batch_items?.map(i => `${i.products?.name} (${i.quantity})`).join(' · ')}</p></div>)}{!batches.length && <p className="text-sm text-muted">Nenhum lote cadastrado.</p>}</div>
