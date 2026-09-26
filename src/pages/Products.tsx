@@ -22,7 +22,7 @@ export function Products() {
   const [busy, setBusy] = useState(false)
   const load = () => Promise.all([getProducts(), getCategories(), getSuppliers(), getBatches()]).then(([p, c, s, b]) => { setItems(p); setCategories(c); setSuppliers(s); setBatches(b) })
   useEffect(() => { void load() }, [])
-  const availableBatches = useMemo(() => form.supplier_id ? batches.filter(b => b.supplier_id === form.supplier_id) : batches, [batches, form.supplier_id])
+  const availableBatches = useMemo(() => batches, [batches])
 
   function edit(product: Product) {
     const batch = batches.find(b => b.id === product.active_batch_id)
@@ -37,10 +37,9 @@ export function Products() {
     let productId = editing?.id
     let error: { message: string } | null = null
     if (editing) ({ error } = await supabase.from('products').update(payload).eq('id', editing.id))
-    else { const result = await supabase.from('products').insert({ ...payload, active_batch_id: form.active_batch_id || null }).select('id').single(); productId = result.data?.id; error = result.error }
-    if (!error && form.active_batch_id && form.supplier_id) { const result = await supabase.from('inventory_batches').update({ supplier_id: form.supplier_id }).eq('id', form.active_batch_id); error = result.error }
-    if (!error && editing && productId && form.active_batch_id !== (editing.active_batch_id || '')) {
-      if (form.active_batch_id && editing.current_stock > 0) { const result = await supabase.rpc('assign_existing_stock_to_batch', { p_product_id: productId, p_batch_id: form.active_batch_id, p_quantity: editing.current_stock, p_notes: 'Vínculo alterado na edição do produto' }); error = result.error }
+    else { const result = await supabase.from('products').insert(payload).select('id').single(); productId = result.data?.id; error = result.error }
+    if (!error && productId && form.active_batch_id !== (editing?.active_batch_id || '')) {
+      if (form.active_batch_id) { const result = await supabase.rpc('link_product_batch', { p_product_id: productId, p_batch_id: form.active_batch_id === 'new' ? null : form.active_batch_id, p_supplier_id: form.supplier_id || null }); error = result.error }
       else { const result = await supabase.from('products').update({ active_batch_id: form.active_batch_id || null }).eq('id', productId); error = result.error }
     }
     setBusy(false)
@@ -59,7 +58,7 @@ export function Products() {
       <label><span className="label">Categoria</span><select className="input" value={form.category_id} onChange={e => setForm({ ...form, category_id: e.target.value })}><option value="">Sem categoria</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
       <div className="grid grid-cols-2 gap-3">
         <label><span className="label">Fornecedor</span><select className="input" value={form.supplier_id} onChange={e => setForm({ ...form, supplier_id: e.target.value, active_batch_id: batches.find(b => b.id === form.active_batch_id)?.supplier_id === e.target.value ? form.active_batch_id : '' })}><option value="">Não informado</option>{suppliers.filter(s => s.active).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-        <label><span className="label">Lote atual</span><select className="input" value={form.active_batch_id} onChange={e => { const batch = batches.find(b => b.id === e.target.value); setForm({ ...form, active_batch_id: e.target.value, supplier_id: batch?.supplier_id || form.supplier_id }) }}><option value="">Sem lote</option>{availableBatches.map(b => <option key={b.id} value={b.id}>Lote {String(b.batch_number).padStart(4, '0')}</option>)}</select></label>
+        <label><span className="label">Lote atual</span><select className="input" value={form.active_batch_id} onChange={e => { const batch = batches.find(b => b.id === e.target.value); setForm({ ...form, active_batch_id: e.target.value, supplier_id: batch?.supplier_id || form.supplier_id }) }}><option value="">Sem lote</option><option value="new">Criar lote com este estoque</option>{availableBatches.map(b => <option key={b.id} value={b.id}>Lote {String(b.batch_number).padStart(4, '0')}</option>)}</select></label>
       </div>
       <p className="-mt-2 text-xs text-muted">O fornecedor pertence ao lote selecionado. Ao alterar, o estoque atual será vinculado ao novo lote sem criar uma entrada.</p>
       <label><span className="label">Descrição (opcional)</span><input className="input" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></label>
